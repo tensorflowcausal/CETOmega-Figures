@@ -1,0 +1,95 @@
+name: Build CETΩ figures
+
+on:
+  push:
+    branches: [ "**" ]
+    tags-ignore: [ "**" ]
+  workflow_dispatch:
+
+concurrency:
+  group: figures-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          python - <<'PY'
+import sys, subprocess, pkgutil
+need = ["numpy", "matplotlib"]
+to_install = [p for p in need if pkgutil.find_loader(p) is None]
+if to_install:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *to_install])
+PY
+
+      - name: Build figures
+        env:
+          OUTDIR: figures
+        run: |
+          mkdir -p "${OUTDIR}"
+          if [ -f src/generate_figures.py ]; then
+            python -m src.generate_figures --outdir "${OUTDIR}"
+          else
+            python - <<'PY'
+import numpy as np, matplotlib.pyplot as plt, os
+os.makedirs("figures", exist_ok=True)
+x = np.linspace(0, 10, 500)
+for lc in [0.5, 1.0, 2.0]:
+    V = np.exp(-x/lc)
+    plt.figure()
+    plt.plot(x, V, label=f"ℓ_c={lc}")
+    plt.xlabel("Δt"); plt.ylabel("Visibility V")
+    plt.title("CETΩ visibility law")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"figures/visibility_lc_{lc}.png", dpi=200)
+    plt.close()
+
+w = np.linspace(0, 5, 400)
+for M in [0.1, 0.5, 1.0]:
+    dphi = w/M
+    plt.figure()
+    plt.plot(w, dphi, label=f"M*={M} (arb.)")
+    plt.xlabel("ω"); plt.ylabel("Δφ(ω)")
+    plt.title("CETΩ causal phase")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"figures/phase_M_{M}.png", dpi=200)
+    plt.close()
+PY
+          fi
+
+      - name: Upload figures as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: figures-${{ github.sha }}
+          path: |
+            figures/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Release (on tag)
+        if: startsWith(${{ github.ref }}, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            figures/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
